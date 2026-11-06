@@ -198,34 +198,65 @@ async def build_tool_server_headers(
     return headers, cookies
 
 
-async def connect_mcp_server(
+def parse_user_ui_settings(user) -> dict:
+    """Return the user's UI settings dict (``user.settings['ui']``), parsed when needed."""
+    settings = getattr(user, 'settings', None)
+    if hasattr(settings, 'model_dump'):
+        settings = settings.model_dump()
+    elif isinstance(settings, str):
+        try:
+            settings = JSONCodec.loads(settings)
+        except Exception:
+            return {}
+    if not isinstance(settings, dict):
+        return {}
+    ui_settings = settings.get('ui')
+    return ui_settings if isinstance(ui_settings, dict) else {}
+
+
+async def get_user_mcp_connections(user, require_enabled: bool = True) -> list[dict]:
+    """Return MCP connections the user configured in their personal settings.
+
+    Gated by the same switches as direct OpenAPI integrations: the
+    ``direct.integrations.enable`` config and the ``features.direct_tool_servers``
+    permission.
+    """
+    if not ENABLE_TOOL_SERVERS or user is None:
+        return []
+
+    try:
+        if not await Config.get('direct.integrations.enable', False):
+            return []
+        if user.role != 'admin' and not await has_permission(
+            user.id,
+            'features.direct_tool_servers',
+            await Config.get('user.permissions'),
+        ):
+            return []
+    except Exception:
+        log.debug('Failed to resolve direct integration permissions for user %s', getattr(user, 'id', '?'))
+        return []
+
+    connections = []
+    for entry in parse_user_ui_settings(user).get('toolServers') or []:
+        if not isinstance(entry, dict) or entry.get('type', '') != 'mcp':
+            continue
+        if require_enabled and not (entry.get('config') or {}).get('enable', True):
+            continue
+        if not (entry.get('info') or {}).get('id'):
+            continue
+        connections.append(entry)
+    return connections
+
+
+async def connect_mcp_connection(
     request,
+    mcp_server_connection: dict,
     server_id: str,
     user,
     extra_params: dict,
-) -> tuple[MCPClient, list[dict]] | None:
-    """Resolve an MCP server connection, authenticate, and return (client, tool_specs).
-
-    Returns None if the server is not found or access is denied.
-    """
-    if not ENABLE_TOOL_SERVERS:
-        log.debug('MCP resolution skipped: external plugins are disabled')
-        return None
-
-    mcp_server_connection = None
-    for server_connection in await Config.get('tool_server.connections', []):
-        if server_connection.get('type', '') == 'mcp' and (server_connection.get('info') or {}).get('id') == server_id:
-            mcp_server_connection = server_connection
-            break
-
-    if not mcp_server_connection or not (mcp_server_connection.get('config') or {}).get('enable'):
-        log.error(f'MCP server with id {server_id} not found')
-        return None
-
-    if not await has_connection_access(user, mcp_server_connection):
-        log.warning(f'Access denied to MCP server {server_id} for user {user.id}')
-        return None
-
+) -> tuple[MCPClient, list[dict]]:
+    """Authenticate and connect to a resolved MCP connection, returning (client, tool_specs)."""
     metadata = extra_params.get('__metadata__', {})
 
     async def get_headers():
@@ -266,6 +297,49 @@ async def connect_mcp_server(
     except BaseException:
         await client.disconnect()
         raise
+
+
+async def connect_mcp_server(
+    request,
+    server_id: str,
+    user,
+    extra_params: dict,
+) -> tuple[MCPClient, list[dict]] | None:
+    """Resolve an MCP server connection, authenticate, and return (client, tool_specs).
+
+    Resolves admin-configured connections first, then falls back to the user's
+    personal MCP connections (direct integrations from user settings).
+
+    Returns None if the server is not found or access is denied.
+    """
+    if not ENABLE_TOOL_SERVERS:
+        log.debug('MCP resolution skipped: external plugins are disabled')
+        return None
+
+    mcp_server_connection = None
+    for server_connection in await Config.get('tool_server.connections', []):
+        if server_connection.get('type', '') == 'mcp' and (server_connection.get('info') or {}).get('id') == server_id:
+            mcp_server_connection = server_connection
+            break
+
+    if mcp_server_connection:
+        if not (mcp_server_connection.get('config') or {}).get('enable'):
+            log.error(f'MCP server with id {server_id} not found')
+            return None
+
+        if not await has_connection_access(user, mcp_server_connection):
+            log.warning(f'Access denied to MCP server {server_id} for user {user.id}')
+            return None
+
+        return await connect_mcp_connection(request, mcp_server_connection, server_id, user, extra_params)
+
+    # Fall back to the user's personal MCP connections (direct integrations)
+    for user_connection in await get_user_mcp_connections(user):
+        if (user_connection.get('info') or {}).get('id') == server_id:
+            return await connect_mcp_connection(request, user_connection, server_id, user, extra_params)
+
+    log.error(f'MCP server with id {server_id} not found')
+    return None
 
 
 # Let no function be called without need, and let what

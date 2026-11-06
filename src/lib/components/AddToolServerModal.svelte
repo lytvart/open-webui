@@ -23,10 +23,12 @@
 		registerOAuthClient,
 		initiateOAuthRedirect
 	} from '$lib/apis/configs';
+	import { verifyUserMCPConnection, registerUserOAuthClient } from '$lib/apis/tools';
 	import AccessControlModal from '$lib/components/workspace/common/AccessControlModal.svelte';
 	import AccessButton from '$lib/components/common/AccessButton.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
+	import Clipboard from '$lib/components/icons/Clipboard.svelte';
 	import Textarea from './common/Textarea.svelte';
 	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 
@@ -68,6 +70,9 @@
 	let oauthServerUrl = '';
 	let oauthScope = '';
 	let oauthResourceParameter = 'auto';
+	// Exact callback URL the provider expects, returned by the register endpoint
+	// and persisted with the connection so it survives reloads.
+	let oauthRedirectUri = '';
 
 	let enable = true;
 	let loading = false;
@@ -89,8 +94,13 @@
 			: $i18n.t('Connection successful');
 
 	const ensureConnectionId = () => {
-		if (type === 'mcp' && !edit && !id.trim()) {
-			id = slugify(name.trim()) || uuidv4();
+		// MCP connections are keyed by this id everywhere (OAuth client storage,
+		// tool routing, backend personal-connection lookup), so it must never be
+		// empty — including when editing a connection saved without one.
+		// Personal connections use UUIDs so their OAuth client keys can never
+		// collide with admin-defined servers.
+		if (type === 'mcp' && !id.trim()) {
+			id = direct ? uuidv4() : slugify(name.trim()) || uuidv4();
 		}
 	};
 
@@ -147,7 +157,11 @@
 				: {})
 		};
 
-		const res = await registerOAuthClient(localStorage.token, formData, 'mcp').catch((err) => {
+		const res = await (
+			direct
+				? registerUserOAuthClient(localStorage.token, formData)
+				: registerOAuthClient(localStorage.token, formData, 'mcp')
+		).catch((err) => {
 			toast.error($i18n.t('Registration failed'));
 			return null;
 		});
@@ -161,6 +175,7 @@
 
 			console.debug('Registration successful', res);
 			oauthClientInfo = res?.oauth_client_info ?? null;
+			oauthRedirectUri = res?.redirect_uri ?? '';
 		}
 	};
 
@@ -197,16 +212,44 @@
 		}
 
 		if (direct) {
-			const res = await getToolServerData(
-				auth_type === 'bearer' ? key : auth_type === 'session' ? localStorage.token : null,
-				path.includes('://') ? path : `${url}${path.startsWith('/') ? '' : '/'}${path}`
-			).catch((err) => {
-				toast.error($i18n.t('Connection failed'));
-			});
+			if (type === 'mcp') {
+				// Personal MCP connections are connected server-side
+				const res = await verifyUserMCPConnection(localStorage.token, {
+					url,
+					path,
+					type: 'mcp',
+					auth_type,
+					headers: headers ? JSON.parse(headers) : undefined,
+					key,
+					config: {
+						enable: enable
+					},
+					info: {
+						id,
+						name,
+						description
+					}
+				}).catch((err) => {
+					toast.error($i18n.t('Connection failed'));
+					return null;
+				});
 
-			if (res) {
-				toast.success($i18n.t('Connection successful'));
-				console.debug('Connection successful', res);
+				if (res) {
+					toast.success($i18n.t('Connection successful'));
+					console.debug('Connection successful', res);
+				}
+			} else {
+				const res = await getToolServerData(
+					auth_type === 'bearer' ? key : auth_type === 'session' ? localStorage.token : null,
+					path.includes('://') ? path : `${url}${path.startsWith('/') ? '' : '/'}${path}`
+				).catch((err) => {
+					toast.error($i18n.t('Connection failed'));
+				});
+
+				if (res) {
+					toast.success($i18n.t('Connection successful'));
+					console.debug('Connection successful', res);
+				}
 			}
 		} else {
 			const res = await verifyToolServerConnection(localStorage.token, {
@@ -415,7 +458,8 @@
 				...(type === 'mcp' && oauthAuthTypes.includes(auth_type)
 					? {
 							...(oauthScope ? { oauth_scope: oauthScope } : {}),
-							oauth_resource_parameter: oauthResourceParameter
+							oauth_resource_parameter: oauthResourceParameter,
+							...(oauthRedirectUri ? { oauth_redirect_uri: oauthRedirectUri } : {})
 						}
 					: {}),
 				...(oauthClientInfo ? { oauth_client_info: oauthClientInfo } : {}),
@@ -456,6 +500,7 @@
 		oauthServerUrl = '';
 		oauthScope = '';
 		oauthResourceParameter = 'auto';
+		oauthRedirectUri = '';
 
 		enable = true;
 		functionNameFilterList = '';
@@ -488,6 +533,41 @@
 			oauthServerUrl = connection.info?.oauth_server_url ?? '';
 			oauthScope = connection.info?.oauth_scope ?? '';
 			oauthResourceParameter = connection.info?.oauth_resource_parameter ?? 'auto';
+			oauthRedirectUri = connection.info?.oauth_redirect_uri ?? '';
+
+			// Backfill for connections saved before the redirect URI was persisted:
+			// rebuilding static client info is discovery-only and idempotent, so it
+			// safely recomputes the exact URI without touching the provider.
+			if (
+				!oauthRedirectUri &&
+				connection.info?.oauth_client_info &&
+				connection.auth_type === 'oauth_2.1_static' &&
+				connection.info?.oauth_client_secret &&
+				connection.info?.id
+			) {
+				const res = await (
+					direct
+						? registerUserOAuthClient(localStorage.token, {
+								url: connection.url ?? '',
+								client_id: connection.info.id,
+								client_secret: connection.info?.oauth_client_secret ?? '',
+								oauth_server_url: connection.info?.oauth_server_url ?? ''
+							})
+						: registerOAuthClient(
+								localStorage.token,
+								{
+									url: connection.url ?? '',
+									client_id: connection.info.id,
+									client_secret: connection.info?.oauth_client_secret ?? '',
+									oauth_server_url: connection.info?.oauth_server_url ?? ''
+								},
+								'mcp'
+							)
+				).catch(() => null);
+				if (res?.redirect_uri) {
+					oauthRedirectUri = res.redirect_uri;
+				}
+			}
 
 			enable = connection.config?.enable ?? true;
 			functionNameFilterList = connection.config?.function_name_filter_list ?? '';
@@ -505,7 +585,7 @@
 	}
 
 	$: if (show && type === 'mcp' && !edit && !oauthClientInfo && name) {
-		id = slugify(name.trim());
+		id = direct ? id || uuidv4() : slugify(name.trim());
 	}
 </script>
 
@@ -577,26 +657,24 @@
 								<div class=" text-xs text-gray-500">{$i18n.t('Type')}</div>
 
 								<div class="">
-									{#if !direct}
-										<button
-											on:click={() => {
-												type = ['', 'openapi'].includes(type) ? 'mcp' : 'openapi';
-											}}
-											type="button"
-											class=" text-xs text-gray-700 dark:text-gray-300"
-										>
-											{#if ['', 'openapi'].includes(type)}
-												{$i18n.t('settings.admin.integrations.openApi.label')}
-											{:else if type === 'mcp'}
-												{$i18n.t('settings.admin.integrations.mcp.label')}
-												<span class="text-gray-500">{$i18n.t('Streamable HTTP')}</span>
-											{/if}
-										</button>
-									{:else}
-										<div class="text-xs text-gray-700 dark:text-gray-300">
-											{$i18n.t('settings.personal.tools.openApi.label')}
-										</div>
-									{/if}
+									<button
+										on:click={() => {
+											type = ['', 'openapi'].includes(type) ? 'mcp' : 'openapi';
+										}}
+										type="button"
+										class=" text-xs text-gray-700 dark:text-gray-300"
+									>
+										{#if ['', 'openapi'].includes(type)}
+											{$i18n.t(
+												direct
+													? 'settings.personal.tools.openApi.label'
+													: 'settings.admin.integrations.openApi.label'
+											)}
+										{:else if type === 'mcp'}
+											{$i18n.t('settings.admin.integrations.mcp.label')}
+											<span class="text-gray-500">{$i18n.t('Streamable HTTP')}</span>
+										{/if}
+									</button>
 								</div>
 							</div>
 						</div>
@@ -618,7 +696,7 @@
 									/>
 								</div>
 							</div>
-							{#if !direct}
+							{#if !direct || type === 'mcp'}
 								<div class="flex flex-col flex-1">
 									<div class="flex justify-between mb-0.5">
 										<label for="enter-id" class={`text-xs text-gray-500`}>
@@ -802,10 +880,10 @@
 
 											{#if !direct}
 												<option value="system_oauth">{$i18n.t('OAuth')}</option>
-												{#if type === 'mcp'}
-													<option value="oauth_2.1">{$i18n.t('OAuth 2.1')}</option>
-													<option value="oauth_2.1_static">{$i18n.t('OAuth 2.1 (Static)')}</option>
-												{/if}
+											{/if}
+											{#if type === 'mcp'}
+												<option value="oauth_2.1">{$i18n.t('OAuth 2.1')}</option>
+												<option value="oauth_2.1_static">{$i18n.t('OAuth 2.1 (Static)')}</option>
 											{/if}
 										</select>
 									</div>
@@ -862,6 +940,43 @@
 								</div>
 							</div>
 						</div>
+
+						{#if oauthAuthTypes.includes(auth_type)}
+							<div class="flex flex-col w-full mt-1.5">
+								<div class="mb-0.5 text-xs text-gray-500">{$i18n.t('Redirect URI')}</div>
+								{#if oauthRedirectUri}
+									<div class="flex items-center gap-1">
+										<input
+											readonly
+											value={oauthRedirectUri}
+											class={`w-full flex-1 text-xs font-mono ${inputClass}`}
+										/>
+										<button
+											type="button"
+											class="p-1 shrink-0 rounded-lg text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-850 transition"
+											aria-label={$i18n.t('Copy Redirect URI')}
+											on:click={() => {
+												navigator.clipboard
+													.writeText(oauthRedirectUri)
+													.then(() => toast.success($i18n.t('Redirect URI copied')))
+													.catch(() => toast.error($i18n.t('Copy failed')));
+											}}
+										>
+											<Clipboard className="size-3.5" />
+										</button>
+									</div>
+									<div class="mt-0.5 text-[0.6875rem] text-gray-400 dark:text-gray-500">
+										{$i18n.t('Register this exact URL in your OAuth provider application.')}
+									</div>
+								{:else}
+									<div class="text-[0.6875rem] text-gray-400 dark:text-gray-500">
+										{$i18n.t(
+											'Register the client to see the exact Redirect URI to use at your provider.'
+										)}
+									</div>
+								{/if}
+							</div>
+						{/if}
 
 						<div class="flex items-center justify-between">
 							<button
@@ -1024,7 +1139,7 @@
 								</div>
 							{/if}
 
-							{#if !direct}
+							{#if !direct || type === 'mcp'}
 								<div class="flex gap-2 mt-2">
 									<div class="flex flex-col w-full">
 										<label

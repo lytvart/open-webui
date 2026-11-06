@@ -2,6 +2,7 @@
 	import { resolveLocalizedResource, resolveLocalizedFunction } from '$lib/utils/localizedContent';
 	import { functions as localizedFunctions } from '$lib/stores';
 	import { getContext, onDestroy, tick } from 'svelte';
+	import { get } from 'svelte/store';
 	import { fly } from 'svelte/transition';
 
 	import {
@@ -14,7 +15,8 @@
 		user,
 		tools as _tools,
 		skills as _skills,
-		toolServers
+		toolServers,
+		selectedToolIds as selectedToolIdsStore
 	} from '$lib/stores';
 
 	import { deleteOAuthSession } from '$lib/apis/auths';
@@ -255,6 +257,16 @@
 				serverId: parts.at(-1) ?? toolId,
 				authType: parts.length > 1 ? (parts[0] === 'server' ? parts[1] : parts[0]) : null
 			});
+			return;
+		}
+
+		if (toolId.startsWith('server:mcp:')) {
+			// MCP servers are toggled globally through the shared store so the
+			// sidebar block and every chat stay in sync
+			const selected = get(selectedToolIdsStore);
+			selectedToolIdsStore.set(
+				selected.includes(toolId) ? selected.filter((id) => id !== toolId) : [...selected, toolId]
+			);
 			return;
 		}
 
@@ -610,6 +622,14 @@
 														{resolveLocalizedResource(tools?.[toolId], $i18n.language, 'name')}
 													</div>
 												</Tooltip>
+
+												{#if tools?.[toolId]?.personal}
+													<div
+														class="shrink-0 rounded-md bg-gray-500/10 px-1.5 py-0.5 text-[0.625rem] leading-none text-gray-500 dark:text-gray-400"
+													>
+														{$i18n.t('Personal')}
+													</div>
+												{/if}
 											</div>
 										</button>
 

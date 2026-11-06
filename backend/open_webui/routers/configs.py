@@ -214,9 +214,14 @@ async def register_oauth_client(
             oauth_client_info = await get_oauth_client_info_with_dynamic_client_registration(
                 request, oauth_client_id, oauth_server_url, oauth_scope=form_data.oauth_scope
             )
+        # Drop any cached client for this id (e.g. from a previous auth_type
+        # attempt) so the next authorize resolves the freshly registered credentials.
+        request.app.state.oauth_client_manager.remove_client(oauth_client_id)
         return {
             'status': True,
             'oauth_client_info': encrypt_data(oauth_client_info.model_dump(mode='json')),
+            # Plaintext copy for the UI: the exact URI to register at the provider.
+            'redirect_uri': str(oauth_client_info.redirect_uris[0]) if oauth_client_info.redirect_uris else None,
         }
     except Exception as e:
         log.debug('Failed to register OAuth client: %s', e)

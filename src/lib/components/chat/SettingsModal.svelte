@@ -222,7 +222,8 @@
 		{
 			id: 'tools',
 			titleKey: 'settings.personal.tools.title',
-			title: $i18n.t('settings.personal.tools.title'),
+			// Fork: renamed from "Integrations" (settings.personal.tools.title)
+			title: $i18n.t('MCP Connection'),
 			searchPrefixes: ['settings.personal.tools.']
 		},
 		{

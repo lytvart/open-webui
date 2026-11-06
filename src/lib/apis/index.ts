@@ -454,7 +454,13 @@ export const getToolServersData = async (servers: object[]) => {
 	return (
 		await Promise.all(
 			servers
-				.filter((server) => server?.config?.enable)
+				.filter(
+					(server) =>
+						server?.config?.enable &&
+						// Personal MCP connections are resolved server-side and
+						// listed through getTools(), not fetched as OpenAPI specs
+						server?.type !== 'mcp'
+				)
 				.map(async (server) => {
 					let error = null;
 

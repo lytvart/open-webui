@@ -1057,22 +1057,80 @@ class OAuthClientManager:
 
         return True
 
-    async def get_client(self, client_id):
+    async def ensure_client_for_user(self, client_id, user):
+        """
+        Lazy-register an OAuth client from a user's personal MCP connections
+        (user.settings.ui.toolServers) when it is not defined in the
+        admin-level TOOL_SERVER_CONNECTIONS config.
+        """
+        if client_id in self.clients:
+            return self.clients[client_id]['client']
+
+        if user is None or not client_id.startswith('mcp:'):
+            return None
+
+        from open_webui.utils.tools import get_user_mcp_connections
+
+        try:
+            connections = await get_user_mcp_connections(user, require_enabled=False)
+        except Exception:
+            return None
+
+        for connection in connections:
+            if connection.get('auth_type', 'none') not in ('oauth_2.1', 'oauth_2.1_static'):
+                continue
+
+            server_id = (connection.get('info') or {}).get('id')
+            if client_id != f'mcp:{server_id}':
+                continue
+
+            oauth_client_info = (connection.get('info') or {}).get('oauth_client_info', '')
+            if not oauth_client_info:
+                continue
+
+            try:
+                oauth_client_info = resolve_oauth_client_info(connection)
+                oauth_client_info = await recover_oauth_client_metadata(connection, oauth_client_info)
+                oauth_client_info = apply_connection_oauth_options(connection, oauth_client_info)
+                return self.add_client(client_id, OAuthClientInformationFull(**oauth_client_info))['client']
+            except InvalidToken:
+                log.error(
+                    'Failed to lazily add OAuth client %s from user settings: InvalidToken. '
+                    'Stored OAuth client data is invalid; reconnect this tool server. '
+                    'Is WEBUI_SECRET_KEY set and unchanged?',
+                    client_id,
+                )
+                continue
+            except Exception as e:
+                log.error(
+                    'Failed to lazily add OAuth client %s from user settings: %s',
+                    client_id,
+                    f'{type(e).__name__}: {e}' if str(e) else type(e).__name__,
+                )
+                continue
+
+        return None
+
+    async def get_client(self, client_id, user=None):
         if not ENABLE_TOOL_SERVERS:
             raise HTTPException(status_code=403, detail='Tool servers are disabled')
 
         if client_id not in self.clients:
             await self.ensure_client_from_config(client_id)
+        if client_id not in self.clients:
+            await self.ensure_client_for_user(client_id, user)
 
         client = self.clients.get(client_id)
         return client['client'] if client else None
 
-    async def get_client_info(self, client_id):
+    async def get_client_info(self, client_id, user=None):
         if not ENABLE_TOOL_SERVERS:
             raise HTTPException(status_code=403, detail='Tool servers are disabled')
 
         if client_id not in self.clients:
             await self.ensure_client_from_config(client_id)
+        if client_id not in self.clients:
+            await self.ensure_client_for_user(client_id, user)
 
         client = self.clients.get(client_id)
         return client['client_info'] if client else None
@@ -1170,7 +1228,8 @@ class OAuthClientManager:
             return None
 
         try:
-            client = await self.get_client(client_id)
+            refresh_user = await Users.get_user_by_id(session.user_id)
+            client = await self.get_client(client_id, user=refresh_user)
             if not client:
                 log.error(f'No OAuth client found for provider {client_id}')
                 return None
@@ -1238,13 +1297,14 @@ class OAuthClientManager:
             return None
 
     async def handle_authorize(self, request, client_id: str, user_id: str) -> RedirectResponse:
-        client = await self.get_client(client_id)
+        authorize_user = await Users.get_user_by_id(user_id)
+        client = await self.get_client(client_id, user=authorize_user)
         if client is None:
             raise HTTPException(404)
-        client_info = await self.get_client_info(client_id)
+        client_info = await self.get_client_info(client_id, user=authorize_user)
         if client_info is None:
             # get_client registers client_info too
-            client_info = await self.get_client_info(client_id)
+            client_info = await self.get_client_info(client_id, user=authorize_user)
         if client_info is None:
             raise HTTPException(404)
 
@@ -1280,7 +1340,10 @@ class OAuthClientManager:
             )
 
     async def handle_callback(self, request, client_id: str, response):
-        client = await self.get_client(client_id)
+        # Resolve the requesting user up front so personal (user-level) MCP OAuth
+        # clients can be lazily registered on nodes that did not serve /authorize.
+        callback_user = await get_optional_verified_user_from_request(request)
+        client = await self.get_client(client_id, user=callback_user)
         if client is None:
             raise HTTPException(404)
 

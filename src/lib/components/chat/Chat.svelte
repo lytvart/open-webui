@@ -43,6 +43,7 @@
 		showArtifacts,
 		artifactContents,
 		tools,
+		selectedToolIds as selectedToolIdsStore,
 		skills,
 		terminalSkills,
 		toolServers,
@@ -54,8 +55,10 @@
 		showFileNavPath,
 		showFileNavDir,
 		chatRequestQueues,
-		desktopEvent
+		desktopEvent,
+		reasoningVariant
 	} from '$lib/stores';
+	import { getReasoningVariantParams } from '$lib/constants/reasoningVariants';
 	import { refreshChatList, refreshFolderChatLists } from '$lib/stores/chatList';
 
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
@@ -354,6 +357,33 @@
 	$: embeddedHeaderTitle = embeddedTitle || $chatTitle || $i18n.t('Chat');
 
 	let selectedToolIds: string[] = [];
+
+	// MCP server selection is owned by the shared store (the sidebar block).
+	// Chat-local state never carries MCP ids: the effective selection is always
+	// the chat's own tools merged with the store, so a server enabled in the
+	// sidebar is automatically active in every chat.
+	const isMcpToolId = (id: string) => id.startsWith('server:mcp:');
+	const withMcpSelection = (ids: string[]) => [
+		...new Set([
+			...ids.filter((id) => !isMcpToolId(id)),
+			...$selectedToolIdsStore.filter(isMcpToolId)
+		])
+	];
+	const adoptMcpSelection = (ids: string[]) => {
+		const extra = ids.filter((id) => isMcpToolId(id) && !$selectedToolIdsStore.includes(id));
+		if (extra.length) {
+			selectedToolIdsStore.set([...$selectedToolIdsStore, ...extra]);
+		}
+		return withMcpSelection(ids);
+	};
+
+	const unsubscribeSharedToolIds = selectedToolIdsStore.subscribe(() => {
+		const merged = withMcpSelection(selectedToolIds);
+		if (merged.join('|') !== selectedToolIds.join('|')) {
+			selectedToolIds = merged;
+		}
+	});
+	onDestroy(() => unsubscribeSharedToolIds());
 	let selectedSkillIds: string[] = [];
 	let selectedFilterIds: string[] = [];
 	let pendingOAuthTools: { id: string; name: string; serverId: string; authType: string | null }[] =
@@ -854,7 +884,7 @@
 			prompt = input.prompt ?? '';
 			messageInput?.setText(prompt);
 			files = input.files ?? [];
-			selectedToolIds = input.selectedToolIds ?? [];
+			selectedToolIds = withMcpSelection(input.selectedToolIds ?? []);
 			selectedSkillIds = input.selectedSkillIds ?? [];
 			selectedFilterIds = input.selectedFilterIds ?? [];
 			webSearchEnabled = input.webSearchEnabled ?? false;
@@ -937,7 +967,9 @@
 		messageInput?.setText('');
 
 		files = [];
-		selectedToolIds = [];
+		// MCP/tool-server toggles live in the shared store (sidebar block) —
+		// restore them instead of clearing
+		selectedToolIds = withMcpSelection([]);
 		selectedSkillIds = [];
 		selectedFilterIds = [];
 		webSearchEnabled = false;
@@ -979,7 +1011,9 @@
 		chatVariables = {};
 		chatFiles = [];
 		files = [];
-		selectedToolIds = [];
+		// MCP/tool-server toggles live in the shared store (sidebar block) —
+		// restore them instead of clearing
+		selectedToolIds = withMcpSelection([]);
 		selectedSkillIds = [];
 		selectedFilterIds = [];
 		webSearchEnabled = false;
@@ -1049,7 +1083,9 @@
 	const resetInput = async () => {
 		// Let the $: update finish first, or webSearchActive misses the default-feature writes
 		await tick();
-		selectedToolIds = [];
+		// MCP/tool-server toggles live in the shared store (sidebar block) —
+		// restore them instead of clearing
+		selectedToolIds = withMcpSelection([]);
 		selectedSkillIds = [];
 		selectedFilterIds = [];
 		pendingOAuthTools = [];
@@ -1212,12 +1248,17 @@
 				imageGenerationEnabled,
 				codeInterpreterEnabled
 			} = defaults);
+			// Sidebar-owned MCP selections always apply; stale per-model ids drop out
+			selectedToolIds = withMcpSelection(selectedToolIds);
 			selectedTerminalId.set(defaults.terminalId);
 
 			pendingOAuthTools = [];
 			selectedToolIds = selectedToolIds.filter((id) => {
 				const tool = ($tools as any[]).find((tool) => tool.id === id);
 				if (tool?.authenticated !== false) return true;
+				// Sidebar-owned MCP servers stay silently inactive until the user
+				// presses Connect in the sidebar block — never auto-redirect on load
+				if ($selectedToolIdsStore.includes(id)) return false;
 				const parts = id.split(':');
 				pendingOAuthTools.push({
 					id,
@@ -1994,7 +2035,9 @@
 				messageInput?.setText('');
 
 				files = [];
-				selectedToolIds = [];
+				// MCP/tool-server toggles live in the shared store (sidebar block) —
+				// restore them instead of clearing
+				selectedToolIds = withMcpSelection([]);
 				selectedSkillIds = [];
 				selectedFilterIds = [];
 				webSearchEnabled = false;
@@ -2846,17 +2889,21 @@
 		}
 
 		if ($page.url.searchParams.get('tools')) {
-			selectedToolIds = $page.url.searchParams
-				.get('tools')
-				?.split(',')
-				.map((id) => id.trim())
-				.filter((id) => id && ($tools ?? []).find((t) => t.id === id));
+			selectedToolIds = adoptMcpSelection(
+				$page.url.searchParams
+					.get('tools')
+					?.split(',')
+					.map((id) => id.trim())
+					.filter((id) => id && ($tools ?? []).find((t) => t.id === id)) ?? []
+			);
 		} else if ($page.url.searchParams.get('tool-ids')) {
-			selectedToolIds = $page.url.searchParams
-				.get('tool-ids')
-				?.split(',')
-				.map((id) => id.trim())
-				.filter((id) => id && ($tools ?? []).find((t) => t.id === id));
+			selectedToolIds = adoptMcpSelection(
+				$page.url.searchParams
+					.get('tool-ids')
+					?.split(',')
+					.map((id) => id.trim())
+					.filter((id) => id && ($tools ?? []).find((t) => t.id === id)) ?? []
+			);
 		}
 
 		// Restore tool selection after OAuth redirect
@@ -2864,7 +2911,7 @@
 		if (pendingToolId) {
 			sessionStorage.removeItem('pendingOAuthToolId');
 			if (!selectedToolIds.includes(pendingToolId)) {
-				selectedToolIds = [...selectedToolIds, pendingToolId];
+				selectedToolIds = adoptMcpSelection([...selectedToolIds, pendingToolId]);
 			}
 		}
 
@@ -4491,6 +4538,8 @@
 				...(messages.length > 0 ? { messages } : {}),
 				params: {
 					...$settings?.params,
+					// Reasoning-effort variant from the chat input button
+					...getReasoningVariantParams($reasoningVariant),
 					...Object.fromEntries(Object.entries(params).filter(([, value]) => value !== null)),
 					model_controls: $settings?.params?.model_controls ?? {},
 					stop: getStopTokens()

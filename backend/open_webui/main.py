@@ -290,7 +290,7 @@ from open_webui.utils.tool_approval import (
     build_tool_approval_resume_payload,
     resolve_tool_call_output,
 )
-from open_webui.utils.tools import set_terminal_servers, set_tool_servers
+from open_webui.utils.tools import parse_user_ui_settings, set_terminal_servers, set_tool_servers
 
 if SAFE_MODE:
     print('SAFE MODE ENABLED')
@@ -2760,7 +2760,7 @@ except Exception as e:
     )
 
 
-async def register_client(request, client_id: str) -> bool:
+async def register_client(request, client_id: str, user=None) -> bool:
     if not ENABLE_TOOL_SERVERS:
         raise HTTPException(status_code=403, detail='Tool servers are disabled')
 
@@ -2768,6 +2768,7 @@ async def register_client(request, client_id: str) -> bool:
 
     connection = None
     connection_idx = None
+    user_level_connection = False
 
     tool_server_connections = await Config.get('tool_server.connections', []) or []
     for idx, conn in enumerate(tool_server_connections):
@@ -2776,6 +2777,17 @@ async def register_client(request, client_id: str) -> bool:
             if info.get('id') == server_id:
                 connection = conn
                 connection_idx = idx
+                break
+
+    if connection is None and user is not None and server_type == 'mcp':
+        # Fall back to the user's personal MCP connections (direct integrations)
+        for idx, conn in enumerate(parse_user_ui_settings(user).get('toolServers') or []):
+            if not isinstance(conn, dict) or conn.get('type') != 'mcp':
+                continue
+            if (conn.get('info') or {}).get('id') == server_id:
+                connection = conn
+                connection_idx = idx
+                user_level_connection = True
                 break
 
     if connection is None or connection_idx is None:
@@ -2836,15 +2848,21 @@ async def register_client(request, client_id: str) -> bool:
         return False
 
     try:
-        connections = await Config.get('tool_server.connections', []) or []
-        connections[connection_idx] = {
+        updated_connection = {
             **connection,
             'info': {
                 **(connection.get('info') or {}),
                 'oauth_client_info': encrypt_data(oauth_client_info.model_dump(mode='json')),
             },
         }
-        await Config.upsert({'tool_server.connections': connections})
+        if user_level_connection and user is not None:
+            connections = parse_user_ui_settings(user).get('toolServers') or []
+            connections[connection_idx] = updated_connection
+            await Users.update_user_settings_by_id(user.id, {'ui': {'toolServers': connections}})
+        else:
+            connections = await Config.get('tool_server.connections', []) or []
+            connections[connection_idx] = updated_connection
+            await Config.upsert({'tool_server.connections': connections})
     except Exception as e:
         log.error(f'Failed to persist updated OAuth client info for tool server {client_id}: {e}')
         return False
@@ -2869,8 +2887,8 @@ async def oauth_client_authorize(
     if not ENABLE_TOOL_SERVERS:
         raise HTTPException(status_code=403, detail='Tool servers are disabled')
 
-    client = await oauth_client_manager.get_client(client_id)
-    client_info = await oauth_client_manager.get_client_info(client_id)
+    client = await oauth_client_manager.get_client(client_id, user=user)
+    client_info = await oauth_client_manager.get_client_info(client_id, user=user)
     if client is None or client_info is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
 
@@ -2880,15 +2898,15 @@ async def oauth_client_authorize(
             client_id,
         )
 
-        registered = await register_client(request, client_id)
+        registered = await register_client(request, client_id, user=user)
         if not registered:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail='Failed to re-register OAuth client',
             )
 
-        client = await oauth_client_manager.get_client(client_id)
-        client_info = await oauth_client_manager.get_client_info(client_id)
+        client = await oauth_client_manager.get_client(client_id, user=user)
+        client_info = await oauth_client_manager.get_client_info(client_id, user=user)
         if client is None or client_info is None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

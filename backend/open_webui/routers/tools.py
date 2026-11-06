@@ -42,6 +42,11 @@ from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.mcp.apps import app_csp, ui_resource_uri, verify_app_binding
 from open_webui.utils.mcp.client import tool_visible_to
 from open_webui.utils.misc import is_string_allowed
+from open_webui.utils.oauth import (
+    encrypt_data,
+    get_oauth_client_info_with_dynamic_client_registration,
+    get_oauth_client_info_with_static_credentials,
+)
 from open_webui.utils.plugin import (
     get_tool_contents_cache,
     get_tool_module_from_cache,
@@ -51,7 +56,12 @@ from open_webui.utils.plugin import (
     resolve_valves_schema_options,
     set_tool_module_in_cache,
 )
-from open_webui.utils.tools import connect_mcp_server, get_tool_servers
+from open_webui.utils.tools import (
+    connect_mcp_connection,
+    connect_mcp_server,
+    get_tool_servers,
+    get_user_mcp_connections,
+)
 from open_webui.utils.tools import get_tool_specs as get_local_tool_specs
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -195,11 +205,53 @@ async def get_tools(
                 )
             )
 
+    # Personal MCP Tool Servers (user-level direct integrations)
+    for server in await get_user_mcp_connections(user):
+        info = server.get('info') or {}
+        server_id = info.get('id')
+        auth_type = server.get('auth_type', 'none')
+
+        tool_id = f'server:mcp:{server_id}'
+        if tool_id in server_connections:
+            # Admin-defined connections take precedence over personal ones
+            continue
+
+        session_token = None
+        if auth_type in ('oauth_2.1', 'oauth_2.1_static'):
+            session_token = await request.app.state.oauth_client_manager.get_oauth_token(user.id, f'mcp:{server_id}')
+
+        server_connections[tool_id] = {**server, 'user_level': True}
+
+        tools.append(
+            ToolUserResponse(
+                **{
+                    'id': tool_id,
+                    'user_id': tool_id,
+                    'name': info.get('name', 'MCP Tool Server'),
+                    'meta': {
+                        'description': info.get('description', ''),
+                    },
+                    'updated_at': int(time.time()),
+                    'created_at': int(time.time()),
+                    'personal': True,
+                    **(
+                        {
+                            'authenticated': session_token is not None,
+                        }
+                        if auth_type in ('oauth_2.1', 'oauth_2.1_static')
+                        else {}
+                    ),
+                }
+            )
+        )
+
     if not bypass_access_control:
         tools = [
             tool
             for tool in tools
             if not str(tool.id).startswith('server:')
+            # Personal connections are owned by the requesting user
+            or server_connections[str(tool.id)].get('user_level', False)
             or await has_connection_access(
                 user,
                 server_connections[str(tool.id)],
@@ -212,6 +264,124 @@ async def get_tools(
         tools = [tool for tool in tools if q in (tool.name or '').casefold()]
 
     return tools
+
+
+class UserMCPConnectionForm(BaseModel):
+    url: str
+    path: str | None = ''
+    type: str | None = 'mcp'
+    auth_type: str | None = 'none'
+    headers: dict | str | None = None
+    key: str | None = None
+    config: dict | None = None
+    info: dict | None = None
+
+    model_config = ConfigDict(extra='allow')
+
+
+async def require_direct_integration_access(user):
+    """Gate user-level MCP endpoints behind the direct-integrations switches."""
+    if not ENABLE_TOOL_SERVERS:
+        raise HTTPException(status_code=403, detail='Tool servers are disabled')
+    if not await Config.get('direct.integrations.enable', False):
+        raise HTTPException(status_code=403, detail='Direct integrations are disabled')
+    if user.role != 'admin' and not await has_permission(
+        user.id,
+        'features.direct_tool_servers',
+        await Config.get('user.permissions'),
+    ):
+        raise HTTPException(status_code=403, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
+
+
+@router.post('/mcp/connect', response_model=dict)
+async def connect_user_mcp_server(
+    request: Request,
+    form_data: UserMCPConnectionForm,
+    user=Depends(get_verified_user),
+):
+    """Verify a personal (user-level) MCP connection server-side and list its tools."""
+    await require_direct_integration_access(user)
+
+    connection = form_data.model_dump()
+    connection['type'] = 'mcp'
+    server_id = (connection.get('info') or {}).get('id') or 'personal'
+
+    try:
+        # Keep connect, discovery and cleanup in one task for the MCP transport.
+        async with asyncio.timeout(15):
+            client, tool_specs = await connect_mcp_connection(request, connection, server_id, user, {})
+            try:
+                return {
+                    'status': True,
+                    'tools': [
+                        {'name': spec['name'], 'description': spec.get('description', '')} for spec in tool_specs
+                    ],
+                    'instructions': client.instructions or '',
+                }
+            finally:
+                await client.disconnect()
+    except HTTPException:
+        raise
+    except TimeoutError:
+        raise HTTPException(status_code=408, detail='Connection to MCP server timed out')
+    except Exception as e:
+        log.debug('Failed to connect to personal MCP server: %s', e)
+        raise HTTPException(status_code=400, detail=f'Failed to connect to MCP server: {e}')
+
+
+class UserOAuthClientRegistrationForm(BaseModel):
+    url: str
+    client_id: str
+    client_secret: str | None = None
+    oauth_server_url: str | None = None
+    oauth_scope: str | None = None
+
+
+@router.post('/mcp/oauth/register', response_model=dict)
+async def register_user_oauth_client(
+    request: Request,
+    form_data: UserOAuthClientRegistrationForm,
+    user=Depends(get_verified_user),
+):
+    """Register an OAuth client for a personal MCP server (user-level equivalent of
+    the admin /configs/oauth/clients/register endpoint)."""
+    await require_direct_integration_access(user)
+
+    if ':' in form_data.client_id or '|' in form_data.client_id:
+        raise HTTPException(status_code=400, detail='Connection ID cannot contain ":" or "|" characters')
+
+    try:
+        oauth_client_id = f'mcp:{form_data.client_id}'
+        oauth_server_url = form_data.oauth_server_url if form_data.oauth_server_url else form_data.url
+
+        if form_data.client_secret:
+            oauth_client_info = await get_oauth_client_info_with_static_credentials(
+                request,
+                oauth_client_id,
+                oauth_server_url,
+                oauth_client_id=form_data.client_id,
+                oauth_client_secret=form_data.client_secret,
+                oauth_scope=form_data.oauth_scope,
+            )
+        else:
+            oauth_client_info = await get_oauth_client_info_with_dynamic_client_registration(
+                request, oauth_client_id, oauth_server_url, oauth_scope=form_data.oauth_scope
+            )
+        # Drop any cached client for this id (e.g. from a previous auth_type
+        # attempt) so the next authorize resolves the freshly registered credentials.
+        request.app.state.oauth_client_manager.remove_client(oauth_client_id)
+        return {
+            'status': True,
+            'oauth_client_info': encrypt_data(oauth_client_info.model_dump(mode='json')),
+            # Plaintext copy for the UI: the exact URI to register at the provider.
+            'redirect_uri': str(oauth_client_info.redirect_uris[0]) if oauth_client_info.redirect_uris else None,
+        }
+    except Exception as e:
+        log.debug('Failed to register OAuth client for personal MCP server: %s', e)
+        raise HTTPException(
+            status_code=400,
+            detail=f'Failed to register OAuth client: {e}',
+        )
 
 
 @router.get('/id/{id}/specs')

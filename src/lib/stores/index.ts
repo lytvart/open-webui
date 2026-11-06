@@ -83,6 +83,46 @@ export const models: Writable<Model[]> = writable([]);
 
 export const knowledge: Writable<null | Document[]> = writable(null);
 export const tools = writable(null);
+
+const loadSelectedToolIds = (): string[] => {
+	try {
+		const parsed = JSON.parse(localStorage.getItem('selectedToolIds') ?? '[]');
+		// The store only owns MCP server selections (sidebar block)
+		return Array.isArray(parsed)
+			? parsed.filter((id) => typeof id === 'string' && id.startsWith('server:mcp:'))
+			: [];
+	} catch (_) {
+		return [];
+	}
+};
+
+// MCP server selections, owned by the sidebar block and shared with every chat;
+// persisted so toggles survive reloads.
+export const selectedToolIds: Writable<string[]> = writable(
+	typeof localStorage !== 'undefined' ? loadSelectedToolIds() : []
+);
+
+selectedToolIds.subscribe((ids) => {
+	if (typeof localStorage === 'undefined') return;
+	try {
+		localStorage.setItem('selectedToolIds', JSON.stringify(ids));
+	} catch (_) {}
+});
+
+// Selected reasoning-effort variant (see $lib/constants/reasoningVariants);
+// persisted so the choice applies to every chat and survives reloads.
+export const reasoningVariant: Writable<string> = writable(
+	typeof localStorage !== 'undefined'
+		? (localStorage.getItem('reasoningVariant') ?? 'fast')
+		: 'fast'
+);
+
+reasoningVariant.subscribe((id) => {
+	if (typeof localStorage === 'undefined') return;
+	try {
+		localStorage.setItem('reasoningVariant', id);
+	} catch (_) {}
+});
 export const skills: Writable<null | any[]> = writable(null);
 export const terminalSkills: Writable<any[]> = writable([]);
 export const functions = writable(null);

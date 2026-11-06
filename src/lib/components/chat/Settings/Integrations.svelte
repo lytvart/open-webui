@@ -7,7 +7,7 @@
 
 	const i18n = getContext<Writable<i18nType>>('i18n');
 
-	import { settings, toolServers, terminalServers } from '$lib/stores';
+	import { settings, tools, toolServers, terminalServers } from '$lib/stores';
 
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
@@ -45,6 +45,10 @@
 			toolServers: servers,
 			terminalServers: terminalServerConfigs
 		});
+
+		// Personal MCP servers are listed by the backend through getTools();
+		// drop the cached tool list so the integrations menu re-fetches them
+		tools.set(null);
 
 		let toolServersData = await getToolServersData($settings?.toolServers ?? []);
 		toolServersData = toolServersData.filter((data: any) => {

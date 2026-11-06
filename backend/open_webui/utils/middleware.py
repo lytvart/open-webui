@@ -156,6 +156,7 @@ from open_webui.utils.terminals import filter_user_terminal_tools, upload_files_
 from open_webui.utils.tool_approval import complete_tool_call, pending_tool_calls
 from open_webui.utils.tool_search import apply_tool_search, resolve_tool_call
 from open_webui.utils.tools import (
+    connect_mcp_connection,
     connect_mcp_server,
     display_file,
     get_attached_knowledge,
@@ -2819,6 +2820,74 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         append=True,
                     )
 
+                # Personal MCP connections are resolved server-side, not browser-direct
+                if tool_server.get('type', '') == 'mcp':
+                    server_id = (tool_server.get('info') or {}).get('id') or ''
+                    try:
+                        async with asyncio.timeout(15):
+                            result = await connect_mcp_connection(
+                                request,
+                                tool_server,
+                                server_id,
+                                user,
+                                extra_params,
+                            )
+                        client, tool_specs = result
+                    except Exception:
+                        log.exception("Failed to connect to personal MCP server '%s'", server_id)
+                        if event_emitter:
+                            await event_emitter(
+                                {
+                                    'type': 'status',
+                                    'data': {
+                                        'action': 'tool_connection',
+                                        'description': f"Failed to connect to MCP server '{server_id}'",
+                                        'error': True,
+                                        'done': True,
+                                    },
+                                }
+                            )
+                        continue
+
+                    mcp_clients[server_id] = client
+
+                    if client.instructions:
+                        form_data['messages'] = add_or_update_system_message(
+                            f'MCP server {JSONCodec.dumps(server_id)} instructions:\n{client.instructions}',
+                            form_data['messages'],
+                            append=True,
+                        )
+
+                    for tool_spec in tool_specs:
+
+                        async def make_tool_function(client, function_name):
+                            async def tool_function(**kwargs):
+                                return await client.call_tool(
+                                    function_name,
+                                    function_args=kwargs,
+                                )
+
+                            return tool_function
+
+                        tool_function = await make_tool_function(client, tool_spec['name'])
+
+                        tool_name = f'{server_id}_{tool_spec["name"]}'
+                        # Providers reject tool names over 64 characters
+                        if len(tool_name) > 64:
+                            tool_name = f'{tool_name[:55]}_{hashlib.sha256(tool_name.encode()).hexdigest()[:8]}'
+
+                        mcp_tools_dict[tool_name] = {
+                            'spec': {
+                                **tool_spec,
+                                'name': tool_name,
+                            },
+                            'callable': tool_function,
+                            'type': 'mcp',
+                            'client': client,
+                            'direct': False,
+                        }
+                    continue
+
                 tool_specs = tool_server.pop('specs', [])
 
                 for tool in tool_specs:
@@ -2831,6 +2900,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         'direct': True,
                         'server': tool_server,
                     }
+
+        if mcp_tools_dict:
+            tools_dict = {**tools_dict, **mcp_tools_dict}
 
         if terminal_id and terminal_capability:
             from open_webui.utils.terminals import add_terminal_agents_md, get_terminal_agents_md

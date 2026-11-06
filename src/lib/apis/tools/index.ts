@@ -587,6 +587,41 @@ export const deleteToolHistoryVersion = async (token: string, id: string, versio
 	return response.json();
 };
 
+export const verifyUserMCPConnection = async (token: string, connection: object) => {
+	const response = await fetch(`${WEBUI_API_BASE_URL}/tools/mcp/connect`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify(connection)
+	});
+	if (!response.ok) throw await response.json();
+	return response.json();
+};
+
+export const registerUserOAuthClient = async (
+	token: string,
+	formData: {
+		url: string;
+		client_id: string;
+		client_secret?: string;
+		oauth_server_url?: string;
+		oauth_scope?: string;
+	}
+) => {
+	const response = await fetch(`${WEBUI_API_BASE_URL}/tools/mcp/oauth/register`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify(formData)
+	});
+	if (!response.ok) throw await response.json();
+	return response.json();
+};
+
 export const setProductionToolVersion = async (token: string, id: string, versionId: string) => {
 	const response = await fetch(
 		`${WEBUI_API_BASE_URL}/tools/id/${encodeURIComponent(id)}/update/version`,
