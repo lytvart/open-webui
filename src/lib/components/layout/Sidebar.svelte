@@ -25,8 +25,8 @@
 		visiblePinnedModels,
 		visibleControls,
 		selectedFolder,
-		WEBUI_NAME,
-		sidebarWidth
+		sidebarWidth,
+		tools as _tools
 	} from '$lib/stores';
 	import {
 		allLoaded,
@@ -87,10 +87,17 @@
 	import Loader from '../common/Loader.svelte';
 	import Folder from '../common/Folder.svelte';
 	import SidebarSection from './Sidebar/Section.svelte';
+	import McpIcon from './Sidebar/icons/McpIcon.svelte';
+	import FolderIcon from './Sidebar/icons/FolderIcon.svelte';
+	import ChatIcon from './Sidebar/icons/ChatIcon.svelte';
+	import McpServerList from './Sidebar/McpServerList.svelte';
+	import AddToolServerModal from '../AddToolServerModal.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
 	import Folders from './Sidebar/Folders.svelte';
 	import SharedFolderItem from './Sidebar/SharedFolderItem.svelte';
 	import { getChannels, createNewChannel } from '$lib/apis/channels';
+	import { getTools } from '$lib/apis/tools';
+	import { getToolServerConnections, setToolServerConnections } from '$lib/apis/configs';
 	import ChannelModal from './Sidebar/ChannelModal.svelte';
 	import ChannelItem from './Sidebar/ChannelItem.svelte';
 	import SearchModal from './SearchModal.svelte';
@@ -244,6 +251,132 @@
 	let showPinnedModels = true;
 	let showPinnedNotes = false;
 	let showChannels = false;
+	let showMcpServers = true;
+
+	// Populate the tool list for the sidebar MCP block (it gates its visibility)
+	const loadSidebarTools = async () => {
+		const res = await getTools(localStorage.token).catch(() => null);
+		_tools.set(res ?? []);
+	};
+	$: if ($_tools === null && $user) {
+		loadSidebarTools();
+	}
+
+	// MCP connection management from the sidebar (personal + admin-defined)
+	let showMcpConnectionModal = false;
+	let showMcpEditModal = false;
+	let editingMcpConnection: any = null;
+	let editingMcpIsPersonal = true;
+
+	const savePersonalMcpConnections = async (servers: any[]) => {
+		const res = await updateUserSettings(localStorage.token, {
+			ui: { toolServers: servers }
+		}).catch((error) => {
+			toast.error(`${error}`);
+			return null;
+		});
+		if (!res) return false;
+
+		settings.set({ ...$settings, toolServers: servers });
+		await loadSidebarTools();
+		return true;
+	};
+
+	const addPersonalMcpConnection = async (server: any) => {
+		await savePersonalMcpConnections([...($settings?.toolServers ?? []), server]);
+		toast.success($i18n.t('Connection saved'));
+	};
+
+	const configureMcpConnection = async (tool: any) => {
+		const connectionId = String(tool.id).split(':').at(-1);
+
+		if (tool.personal) {
+			const connection = ($settings?.toolServers ?? []).find(
+				(s: any) => (s?.info?.id ?? s?.id) === connectionId
+			);
+			if (!connection) {
+				toast.error($i18n.t('Connection not found'));
+				return;
+			}
+			editingMcpIsPersonal = true;
+			editingMcpConnection = connection;
+			showMcpEditModal = true;
+		} else if ($user?.role === 'admin') {
+			const res = await getToolServerConnections(localStorage.token).catch(() => null);
+			const servers = res?.TOOL_SERVER_CONNECTIONS ?? [];
+			const connection = servers.find(
+				(s: any) =>
+					String(s?.info?.id ?? s?.id ?? '')
+						.split(':')
+						.at(-1) === connectionId
+			);
+			if (!connection) {
+				toast.error($i18n.t('Connection not found'));
+				return;
+			}
+			editingMcpIsPersonal = false;
+			editingMcpConnection = connection;
+			showMcpEditModal = true;
+		}
+	};
+
+	const saveEditedMcpConnection = async (server: any) => {
+		if (editingMcpIsPersonal) {
+			const servers = [...($settings?.toolServers ?? [])];
+			const idx = servers.findIndex((s: any) => (s?.info?.id ?? s?.id) === server?.info?.id);
+
+			if (idx === -1) {
+				servers.push(server);
+			} else {
+				servers[idx] = server;
+			}
+			if (await savePersonalMcpConnections(servers)) {
+				toast.success($i18n.t('Connection saved'));
+			}
+		} else {
+			const res = await getToolServerConnections(localStorage.token).catch(() => null);
+			const servers = res?.TOOL_SERVER_CONNECTIONS ?? [];
+			const idx = servers.findIndex((s: any) => s?.info?.id === server?.info?.id);
+
+			if (idx === -1) {
+				servers.push(server);
+			} else {
+				servers[idx] = server;
+			}
+			const saved = await setToolServerConnections(localStorage.token, {
+				TOOL_SERVER_CONNECTIONS: servers
+			}).catch(() => null);
+
+			if (saved) {
+				toast.success($i18n.t('Connections saved successfully'));
+				await loadSidebarTools();
+			}
+		}
+	};
+
+	const deleteEditedMcpConnection = async () => {
+		const connectionId = editingMcpConnection?.info?.id;
+
+		if (editingMcpIsPersonal) {
+			await savePersonalMcpConnections(
+				($settings?.toolServers ?? []).filter((s: any) => (s?.info?.id ?? s?.id) !== connectionId)
+			);
+			toast.success($i18n.t('Connection deleted'));
+		} else {
+			const res = await getToolServerConnections(localStorage.token).catch(() => null);
+			const servers = (res?.TOOL_SERVER_CONNECTIONS ?? []).filter(
+				(s: any) => s?.info?.id !== connectionId
+			);
+			const saved = await setToolServerConnections(localStorage.token, {
+				TOOL_SERVER_CONNECTIONS: servers
+			}).catch(() => null);
+
+			if (saved) {
+				toast.success($i18n.t('Connections saved successfully'));
+				await loadSidebarTools();
+			}
+		}
+	};
 	$: channelGroups = [
 		$channels.filter((channel) => channel.type !== 'group' && channel.type !== 'dm'),
 		$channels.filter((channel) => channel.type === 'group'),
@@ -1038,6 +1171,17 @@
 	}}
 />
 
+<!-- MCP connection management from the sidebar MCP block -->
+<AddToolServerModal bind:show={showMcpConnectionModal} onSubmit={addPersonalMcpConnection} direct />
+<AddToolServerModal
+	edit
+	direct={editingMcpIsPersonal}
+	bind:show={showMcpEditModal}
+	connection={editingMcpConnection}
+	onSubmit={saveEditedMcpConnection}
+	onDelete={deleteEditedMcpConnection}
+/>
+
 <svelte:window
 	bind:innerWidth={viewportWidth}
 	on:pointermove={(e) => {
@@ -1129,12 +1273,9 @@
 							<div
 								class="self-center relative flex size-[calc(30px*var(--app-text-scale,1))] items-center justify-center rounded-lg transition group-hover:bg-gray-100 dark:group-hover:bg-gray-900"
 							>
-								<!-- LICENSE covers this Open WebUI sidebar logo.
-							Do not alter, remove, obscure, or replace it except as LICENSE permits:
-							https://docs.openwebui.com/license. -->
 								<img
-									src="{WEBUI_BASE_URL}/static/favicon.png"
-									class="sidebar-new-chat-icon size-5 rounded-full group-hover:hidden"
+									src="{WEBUI_BASE_URL}/static/app_bg.png"
+									class="sidebar-new-chat-icon size-5 rounded-md object-cover group-hover:hidden"
 									alt=""
 								/>
 
@@ -1306,7 +1447,7 @@
 				<div
 					class="sidebar {$mobile
 						? 'px-0.75 pt-1 pb-1 -mb-2'
-						: 'px-1 pt-0.5 pb-0.5'} flex shrink-0 justify-between space-x-1 text-gray-600 dark:text-gray-400 sticky top-0 z-10"
+						: 'px-1 pt-0.5 pb-3'} flex shrink-0 justify-between space-x-1 text-gray-600 dark:text-gray-400 sticky top-0 z-10"
 				>
 					<a
 						class="flex items-center rounded-xl size-8.5 {$mobile
@@ -1321,22 +1462,18 @@
 					Do not alter, remove, obscure, or replace it except as LICENSE permits:
 					https://docs.openwebui.com/license. -->
 						<img
-							crossorigin="anonymous"
-							src="{WEBUI_BASE_URL}/static/favicon.png"
-							class="sidebar-new-chat-icon size-5 rounded-full"
+							src="{WEBUI_BASE_URL}/static/app_bg.png"
+							class="sidebar-new-chat-icon size-5 rounded-md object-cover"
 							alt=""
 						/>
 					</a>
 
-					<a href="/" class="flex min-w-0 flex-1 px-0.5" on:click={newChatHandler}>
-						<!-- LICENSE covers this Open WebUI sidebar name.
-					Do not alter, remove, obscure, or replace it except as LICENSE permits:
-					https://docs.openwebui.com/license. -->
+					<a href="/" class="flex min-w-0 flex-1 px-0.5 mr-2" on:click={newChatHandler}>
 						<div
 							id="sidebar-webui-name"
-							class=" self-center truncate font-normal text-gray-700 dark:text-gray-200"
+							class="self-center truncate font-bold text-[0.9375rem] text-[#00163a] dark:text-gray-100"
 						>
-							{$WEBUI_NAME}
+							STELLAR<span class="text-[#0073f3] dark:text-brand">.AI</span>
 						</div>
 					</a>
 					<div class="flex shrink-0 items-center gap-px">
@@ -1385,7 +1522,7 @@
 				{/if}
 
 				<div
-					class="relative flex flex-col flex-1 overflow-y-auto scrollbar-hidden space-y-1.5 {$mobile
+					class="relative flex flex-col flex-1 overflow-y-auto scrollbar-hidden space-y-1 {$mobile
 						? 'pt-1.5'
 						: ''} pb-2.5"
 					style:display={inboxOpened ? 'none' : undefined}
@@ -1397,7 +1534,7 @@
 						}
 					}}
 				>
-					<div class="pb-1">
+					<div>
 						<div class="px-1 flex justify-center text-gray-700 dark:text-gray-300">
 							<a
 								id="sidebar-new-chat-button"
@@ -1487,6 +1624,21 @@
 						</div>
 					</div>
 
+					<SidebarSection
+						id="sidebar-mcp-servers"
+						bind:open={showMcpServers}
+						name={$i18n.t('MCP Servers')}
+						dragAndDrop={false}
+						icon={McpIcon}
+					>
+						<McpServerList
+							on:add={() => (showMcpConnectionModal = true)}
+							on:configure={(e) => {
+								configureMcpConnection(e.detail);
+							}}
+						/>
+					</SidebarSection>
+
 					{#if $visiblePinnedModels.length > 0}
 						<SidebarSection
 							id="sidebar-models"
@@ -1554,6 +1706,7 @@
 							id="sidebar-folders"
 							bind:open={showFolders}
 							name={$i18n.t('Folders')}
+							icon={FolderIcon}
 							onAdd={() => {
 								showCreateFolderModal = true;
 							}}
@@ -1607,6 +1760,7 @@
 					<SidebarSection
 						id="sidebar-chats"
 						name={$i18n.t('Chats')}
+						icon={ChatIcon}
 						on:change={async (e) => {
 							selectedFolder.set(null);
 						}}

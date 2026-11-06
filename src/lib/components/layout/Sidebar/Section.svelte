@@ -19,10 +19,35 @@
 	export let onAddLabel = '';
 	export let onAdd: null | AddHandler = null;
 	export let dragAndDrop = true;
+	// Fork addition: optional leading icon component for the section title
+	export let icon: any = null;
 
 	let sectionElement: HTMLDivElement;
 	let loaded = false;
 	let draggedOver = false;
+
+	// Fork: the group borders below the title must only render when the slot
+	// actually produced content (e.g. Folders open with zero folders has none).
+	// Svelte leaves comment/whitespace anchors, so :empty can't do this in CSS.
+	let contentElement: HTMLDivElement;
+	let hasContent = false;
+	let contentObserver: MutationObserver | undefined;
+
+	const refreshHasContent = () => {
+		hasContent =
+			!!contentElement &&
+			(contentElement.children.length > 0 || (contentElement.textContent ?? '').trim() !== '');
+	};
+
+	$: if (contentElement) {
+		refreshHasContent();
+		contentObserver?.disconnect();
+		contentObserver = new MutationObserver(refreshHasContent);
+		contentObserver.observe(contentElement, { childList: true, subtree: true });
+	} else {
+		contentObserver?.disconnect();
+		hasContent = false;
+	}
 
 	const setOpen = (state: boolean) => {
 		open = state;
@@ -105,6 +130,8 @@
 	});
 
 	onDestroy(() => {
+		contentObserver?.disconnect();
+
 		if (!dragAndDrop) {
 			return;
 		}
@@ -125,20 +152,25 @@
 
 		{#if collapsible}
 			<Collapsible bind:open className="w-full" buttonClassName="w-full" onChange={setOpen}>
-				<div class="flex items-center justify-between h-6 w-full pl-3.5 pr-1.5 shrink-0">
+				<div
+					class="flex items-center justify-between h-8 mx-1 w-[calc(100%-0.5rem)] px-2 shrink-0 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
+				>
 					<h2 class="flex flex-1 h-full">
 						<button
 							type="button"
-							class="group flex flex-1 h-full items-center gap-1 text-left text-xs text-gray-400 hover:text-gray-500 dark:text-gray-500 dark:hover:text-gray-400 transition-colors duration-100 {buttonClassName}"
+							class="group flex flex-1 h-full items-center gap-2 text-left text-[0.8125rem] leading-5 text-[#00163a] dark:text-gray-200 transition-colors duration-100 {buttonClassName}"
 							aria-expanded={open}
 							aria-controls="{id}-content"
 						>
+							{#if icon}
+								<svelte:component this={icon} className="size-4 shrink-0" />
+							{/if}
 							<span>{name}</span>
 							<span
-								class="flex opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-all duration-100"
-								style="transform: rotate({open ? '90deg' : '0deg'})"
+								class="flex opacity-70 transition-all duration-100"
+								style="transform: rotate({open ? '-90deg' : '90deg'})"
 							>
-								<ChevronRight className="size-[0.6875rem]" />
+								<ChevronRight className="size-[0.9375rem]" />
 							</span>
 						</button>
 					</h2>
@@ -165,7 +197,17 @@
 					{/if}
 				</div>
 
-				<div id="{id}-content" slot="content" class="w-full {contentClassName}">
+				<!-- Content only mounts while open: matching faint brand-blue rules above
+					and below mark the expanded group's boundaries. -->
+				<!-- Group indicator: left rail (same language as the reasoning block,
+					thinner). Previous top/bottom variant, for reference:
+					hasContent ? 'border-y border-brand/10 pt-1.5 pb-1.5' : '' -->
+				<div
+					id="{id}-content"
+					slot="content"
+					bind:this={contentElement}
+					class="w-full {contentClassName} {hasContent ? 'border-l-[2px] border-l-brand/35' : ''}"
+				>
 					<slot></slot>
 				</div>
 			</Collapsible>
