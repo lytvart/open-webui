@@ -243,7 +243,7 @@
 
 			{#if edit === true}
 				<div
-					class=" w-full bg-gray-50 dark:bg-gray-800 rounded-3xl px-4 py-3 mb-2 {($settings?.highContrastMode ??
+					class=" w-full bg-brand/10 dark:bg-brand/15 rounded-3xl px-4 py-3 mb-2 {($settings?.highContrastMode ??
 					false)
 						? 'focus-within:outline focus-within:outline-2 focus-within:-outline-offset-2 focus-within:outline-blue-500'
 						: ''}"
@@ -430,7 +430,7 @@
 					>
 						<div
 							class="rounded-3xl {($settings?.chatBubble ?? true)
-								? `max-w-[90%] px-4 py-1.5  bg-gray-50 dark:bg-gray-850 ${
+								? `max-w-[90%] px-4 py-1.5  bg-brand/10 dark:bg-brand/15 ${
 										message.files ? (isOwn ? 'rounded-se-lg' : 'rounded-ss-lg') : ''
 									}`
 								: ' w-full'}"

@@ -32,7 +32,7 @@
 		}}
 	>
 		<a
-			class="grow flex items-center space-x-2 rounded-xl px-2 py-[0.4375rem] group-hover:bg-gray-100 dark:group-hover:bg-gray-900 transition"
+			class="grow flex items-center space-x-2 rounded-xl px-2 py-[0.4375rem] group-hover:bg-brand/10 dark:group-hover:bg-brand/10 transition"
 			href="/?model={model?.id}"
 			on:click={onClick}
 			draggable="false"

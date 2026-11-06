@@ -30,6 +30,10 @@
 	--color-gray-850: oklch(0.27 0 0);
 	--color-gray-900: oklch(0.2 0 0);
 	--color-gray-950: oklch(0.16 0 0);
+
+	/* Fork brand color: replaces solid black accents (buttons, toggles, active pills) */
+	--color-brand: #0073f3;
+	--color-brand-hover: #005fd1;
 }
 
 /*
