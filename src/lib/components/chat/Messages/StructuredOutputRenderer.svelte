@@ -167,8 +167,14 @@
 							messageDone={done}
 							className="w-full"
 							buttonClassName={detailButtonClassName}
+							collapsedPreview={detailToken.attributes?.type === 'reasoning'}
 						>
-							<div class="mb-1.5" slot="content">
+							<div
+								class="mb-1.5 {detailToken.attributes?.type === 'reasoning'
+									? 'reasoning-block'
+									: ''}"
+								slot="content"
+							>
 								<div class="markdown-prose">
 									<Markdown
 										id={`${id}-${displayItem.id}-${detailIndex}-detail`}
@@ -229,8 +235,12 @@
 				messageDone={done}
 				className="w-full space-y-2"
 				buttonClassName={detailButtonClassName}
+				collapsedPreview={detailToken.attributes?.type === 'reasoning'}
 			>
-				<div class="mb-1.5" slot="content">
+				<div
+					class="mb-1.5 {detailToken.attributes?.type === 'reasoning' ? 'reasoning-block' : ''}"
+					slot="content"
+				>
 					<div class="markdown-prose">
 						<Markdown
 							id={`${id}-${displayItem.id}-detail`}

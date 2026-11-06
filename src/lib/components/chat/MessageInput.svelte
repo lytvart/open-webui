@@ -92,6 +92,7 @@
 	import VoiceRecording from './MessageInput/VoiceRecording.svelte';
 	import ModelSelector from './ModelSelector.svelte';
 	import ModelControls from './MessageInput/ModelControls.svelte';
+	import ReasoningMenu from './MessageInput/ReasoningMenu.svelte';
 
 	import ToolServersModal from './ToolServersModal.svelte';
 	import SkillsModal from './SkillsModal.svelte';
@@ -265,6 +266,7 @@
 	export let oauthRedirectHandler: Function = () => {};
 
 	let showTerminalMenu = false;
+	let showReasoningMenu = false;
 
 	export let messageQueue: { id: string; prompt: string; files: any[]; error?: string }[] = [];
 	export let onQueueSendNow: (id: string) => void = () => {};
@@ -1881,7 +1883,7 @@
 			<div
 				class="flex flex-col px-3 {($settings?.widescreenMode ?? null)
 					? 'max-w-full'
-					: 'max-w-[58rem]'} w-full"
+					: 'max-w-[75.4rem]'} w-full"
 			>
 				<div class="relative">
 					{#if typingUsers.length > 0}
@@ -1934,7 +1936,7 @@
 			<div
 				class="{($settings?.widescreenMode ?? null)
 					? 'max-w-full'
-					: 'max-w-[58rem]'} px-2 mx-auto inset-x-0"
+					: 'max-w-[75.4rem]'} px-2 mx-auto inset-x-0"
 			>
 				<div class="">
 					<input
@@ -2841,6 +2843,9 @@
 								</div>
 
 								<div class="self-end flex space-x-1 mr-1 min-w-0 gap-[0.03125rem]">
+									<div class="flex items-center">
+										<ReasoningMenu bind:show={showReasoningMenu} />
+									</div>
 									<div class="flex min-w-0 max-w-[10rem] items-center sm:max-w-[13rem]">
 										<ModelSelector
 											bind:this={modelSelector}
@@ -2853,12 +2858,15 @@
 											triggerClassName="items-center gap-1.5 rounded-lg pl-2 pr-1.5 py-1 text-[0.8125rem] font-normal text-gray-600 transition-colors duration-100 hover:bg-gray-50/40 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-gray-800/40 dark:hover:text-gray-200"
 										/>
 									</div>
-									<ModelControls
-										selectedModels={selectedModelIds}
-										bind:chatFiles
-										bind:params
-										{onParamChange}
-									/>
+									<!-- Model controls (params sliders) are admin-only in this fork -->
+									{#if $_user?.role === 'admin'}
+										<ModelControls
+											selectedModels={selectedModelIds}
+											bind:chatFiles
+											bind:params
+											{onParamChange}
+										/>
+									{/if}
 
 									{#if isActive && (history.messages[history.currentId]?.user_id ?? $_user?.id) === $_user?.id && prompt === '' && files.length === 0}
 										<div class=" flex items-center">

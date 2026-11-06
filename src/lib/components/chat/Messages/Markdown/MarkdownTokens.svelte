@@ -504,9 +504,15 @@
 							messageDone={done}
 							className="w-full"
 							buttonClassName={detailButtonClassName}
+							collapsedPreview={detailToken?.attributes?.type === 'reasoning'}
 							dir="auto"
 						>
-							<div class="mb-1.5" slot="content">
+							<div
+								class="mb-1.5 {detailToken?.attributes?.type === 'reasoning'
+									? 'reasoning-block'
+									: ''}"
+								slot="content"
+							>
 								<svelte:self
 									id={`${id}-${tokenIdx}-${detailIdx}-d`}
 									{chatId}
@@ -566,9 +572,13 @@
 				messageDone={done}
 				className="w-full space-y-2"
 				buttonClassName={detailButtonClassName}
+				collapsedPreview={token?.attributes?.type === 'reasoning'}
 				dir="auto"
 			>
-				<div class=" mb-1.5" slot="content">
+				<div
+					class=" mb-1.5 {token?.attributes?.type === 'reasoning' ? 'reasoning-block' : ''}"
+					slot="content"
+				>
 					<svelte:self
 						id={`${id}-${tokenIdx}-d`}
 						{chatId}

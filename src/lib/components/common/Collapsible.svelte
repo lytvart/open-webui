@@ -15,6 +15,8 @@
 	import { slide } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
+	import { stickToBottom } from '$lib/action/stickToBottom';
+
 	import ChevronUp from '../icons/ChevronUp.svelte';
 	import ChevronDown from '../icons/ChevronDown.svelte';
 	import Spinner from './Spinner.svelte';
@@ -37,6 +39,9 @@
 	export let disabled = false;
 	export let messageDone = false;
 	export let hide = false;
+	// When true, the content stays visible (clipped to a few lines) while
+	// collapsed, so users can see the model thinking instead of just a spinner.
+	export let collapsedPreview = false;
 
 	export let onChange: Function = () => {};
 
@@ -52,7 +57,7 @@
 	const collapsibleId = uuidv4();
 </script>
 
-<div {id} class={className}>
+<div {id} class="{className} {open ? 'collapsible-open' : ''}">
 	{#if title !== null}
 		<button
 			type="button"
@@ -163,6 +168,18 @@
 	{#if !grow}
 		{#if open && !hide}
 			<div transition:slide={{ duration: 300, easing: quintOut, axis: 'y' }}>
+				<slot name="content" />
+			</div>
+		{:else if collapsedPreview && !hide}
+			<!-- svelte-ignore a11y-click-events-have-key-events -->
+			<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+			<div
+				use:stickToBottom
+				class="max-h-[9.5rem] overflow-hidden cursor-pointer [mask-image:linear-gradient(to_bottom,transparent_0,black_45%)]"
+				role="button"
+				aria-label={title ?? ''}
+				on:click={() => toggleOpen()}
+			>
 				<slot name="content" />
 			</div>
 		{/if}

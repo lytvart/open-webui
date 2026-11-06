@@ -16,6 +16,7 @@
 	import MCPApp, { type MCPAppEmbed } from '$lib/components/chat/Messages/MCPApp.svelte';
 
 	import { settings } from '$lib/stores';
+	import { stickToBottom } from '$lib/action/stickToBottom';
 
 	const i18n = getContext<Writable<i18nType>>('i18n');
 
@@ -305,6 +306,24 @@
 
 	{#if open}
 		<div transition:slide={{ duration: 300, easing: quintOut, axis: 'y' }}>
+			<div class="mb-1">
+				<slot name="content" />
+			</div>
+		</div>
+	{:else if reasoningCount > 0}
+		<!-- Collapsed preview: show a few clipped lines of reasoning so users
+		     can see the model is thinking instead of just a spinner. -->
+		<!-- svelte-ignore a11y-click-events-have-key-events -->
+		<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+		<div
+			use:stickToBottom
+			class="max-h-[4.5rem] overflow-hidden cursor-pointer [mask-image:linear-gradient(to_bottom,transparent_0,black_45%)]"
+			role="button"
+			aria-label={$i18n.t('Toggle details')}
+			on:click={() => {
+				open = true;
+			}}
+		>
 			<div class="mb-1">
 				<slot name="content" />
 			</div>
