@@ -45,15 +45,15 @@ Hard rules:
 
 ```bash
 docker run -d --name stellar-ai --restart unless-stopped \
-  -p 127.0.0.1:3080:8080 \
+  -p 127.0.0.1:3001:8080 \
   -v stellar-data:/app/backend/data \
   --env-file ~/stellar/.env \
   stellar-ai:latest
 ```
 
 - Bind to `127.0.0.1` only — TLS is the reverse proxy's job (Caddy/nginx/
-  Traefik → proxy to `:3080`, buffering off / long timeouts for SSE).
-- Check: `docker logs -f stellar-ai`, then `curl http://127.0.0.1:3080/health`.
+  Traefik → proxy to `:3001`, buffering off / long timeouts for SSE).
+- Check: `docker logs -f stellar-ai`, then `curl http://127.0.0.1:3001/health`.
 - Migrating from an official open-webui container: stop it and reuse **the
   same volume** at `/app/backend/data` — chats/users come right along.
 
@@ -104,14 +104,14 @@ docker build -t stellar-ai:latest \
 #    stellar-data volume and are NOT touched)
 docker rm -f stellar-ai
 docker run -d --name stellar-ai --restart unless-stopped \
-  -p 127.0.0.1:3080:8080 \
+  -p 127.0.0.1:3001:8080 \
   -v stellar-data:/app/backend/data \
   --env-file ~/stellar/.env \
   stellar-ai:latest
 
 # 4. verify
 docker logs -f stellar-ai        # wait for startup, Ctrl-C to exit
-curl http://127.0.0.1:3080/health
+curl http://127.0.0.1:3001/health
 
 # ═══════════════════════════════════════════════════════════════
 ```
@@ -124,7 +124,7 @@ git checkout <previous-good-commit>
 docker build -t stellar-ai:rollback .
 docker rm -f stellar-ai
 docker run -d --name stellar-ai --restart unless-stopped \
-  -p 127.0.0.1:3080:8080 \
+  -p 127.0.0.1:3001:8080 \
   -v stellar-data:/app/backend/data \
   --env-file ~/stellar/.env \
   stellar-ai:rollback
