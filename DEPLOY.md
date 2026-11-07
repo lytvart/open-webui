@@ -79,6 +79,62 @@ docker rm -f stellar-ai
 
 Data survives in the `stellar-data` volume; only the image changes.
 
+---
+
+# ⬛⬛⬛  PULL UPDATES  ⬛⬛⬛
+
+> **You pushed a fix/feature to the fork from your dev machine.
+> Now log into the prod server and run exactly this — nothing else:**
+
+```bash
+# ═══════════════════════  PULL UPDATES  ═══════════════════════
+
+cd ~/stellar-ai
+
+# 1. get the new commits (public repo: no auth, no prompts)
+git pull
+
+# 2. rebuild the image (incremental: untouched layers are cached;
+#    frontend-only change ≈ 2–5 min, backend-only change reuses Node)
+docker build -t stellar-ai:latest \
+  --build-arg BUILD_HASH=$(git rev-parse --short HEAD) \
+  --build-arg BUILD_CHANNEL=prod .
+
+# 3. swap the container (~2 s downtime; users/chats/MCP live in the
+#    stellar-data volume and are NOT touched)
+docker rm -f stellar-ai
+docker run -d --name stellar-ai --restart unless-stopped \
+  -p 127.0.0.1:3080:8080 \
+  -v stellar-data:/app/backend/data \
+  --env-file ~/stellar/.env \
+  stellar-ai:latest
+
+# 4. verify
+docker logs -f stellar-ai        # wait for startup, Ctrl-C to exit
+curl http://127.0.0.1:3080/health
+
+# ═══════════════════════════════════════════════════════════════
+```
+
+**Rollback if a deploy is broken** (same volume, old code):
+
+```bash
+cd ~/stellar-ai
+git checkout <previous-good-commit>
+docker build -t stellar-ai:rollback .
+docker rm -f stellar-ai
+docker run -d --name stellar-ai --restart unless-stopped \
+  -p 127.0.0.1:3080:8080 \
+  -v stellar-data:/app/backend/data \
+  --env-file ~/stellar/.env \
+  stellar-ai:rollback
+```
+
+**Speed-ups once stable (optional):**
+
+- Compose file on the server → update = `git pull && docker compose up -d --build`
+- GitHub Actions + GHCR → server never builds; update = `docker compose pull && docker compose up -d`
+
 ## 6. Upstream rebases (from the dev machine)
 
 ```bash
