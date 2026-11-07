@@ -140,8 +140,6 @@ docker run -d --name stellar-ai --restart unless-stopped \
   cd ~/stellar && git -C ~/stellar-ai pull && docker compose up -d --build
   ```
 
-- GitHub Actions + GHCR → server never builds; update = `docker compose pull && docker compose up -d`
-
 ## 6. Upstream rebases (from the dev machine)
 
 ```bash
