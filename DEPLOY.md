@@ -132,7 +132,14 @@ docker run -d --name stellar-ai --restart unless-stopped \
 
 **Speed-ups once stable (optional):**
 
-- Compose file on the server → update = `git pull && docker compose up -d --build`
+- **Compose on the server** → update = one command (file lives outside the
+  repo at `~/stellar/docker-compose.yaml`, see fork file
+  `stellar-server/docker-compose.yaml`):
+
+  ```bash
+  cd ~/stellar && git -C ~/stellar-ai pull && docker compose up -d --build
+  ```
+
 - GitHub Actions + GHCR → server never builds; update = `docker compose pull && docker compose up -d`
 
 ## 6. Upstream rebases (from the dev machine)
