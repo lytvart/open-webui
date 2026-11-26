@@ -44,8 +44,8 @@ def normalize_ask_user_request(arguments: dict) -> dict:
         seen_ids.add(question_id)
 
         options = question.get('options')
-        if not isinstance(options, list) or not 2 <= len(options) <= 3:
-            raise ValueError('Each question requires 2-3 options.')
+        if not isinstance(options, list) or not 2 <= len(options) <= 10:
+            raise ValueError('Each question requires 2-10 options.')
 
         normalized_options = []
         for option in options:

@@ -106,7 +106,7 @@ docker rm -f stellar-ai
 docker run -d --name stellar-ai --restart unless-stopped \
   -p 127.0.0.1:3001:8080 \
   -v stellar-data:/app/backend/data \
-  --env-file ~/stellar/.env \
+  --env-file ~/modelInfra/openweb/.env \
   stellar-ai:latest
 
 # 4. verify
